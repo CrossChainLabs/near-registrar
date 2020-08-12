@@ -9,7 +9,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 near-sdk = "1.0.0"
-#near-vm-logic = "1.1.0"
 
 [profile.release]
 codegen-units = 1
@@ -18,3 +17,6 @@ opt-level = "z"
 lto = true
 debug = false
 panic = "abort"
+
+[dependencies.bs58]
+version = "0.3"

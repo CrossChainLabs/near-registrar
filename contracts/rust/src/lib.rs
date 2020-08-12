@@ -25,7 +25,7 @@ use near_sdk::{env, near_bindgen, wee_alloc, AccountId, Balance, Promise, Storag
 use std::collections::HashMap;
 
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::{Hasher}; //Hash, 
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -37,45 +37,44 @@ const STORAGE_PRICE_PER_BYTE: Balance = 100000000000000000000;
 
 pub struct Bid {
     amount: Balance,
-    commitment: Base58Hash
+    commitment: Vec<u8>
 }
-  
+
+// AccountId of the bidder
 pub struct Auction {
-    start_blockheight: BlockHeight,
+    start_block_height: BlockHeight,
     bids: HashMap<AccountId, Bid>,
     reveals: HashMap<AccountId, Balance>,
 }
 
+// AccountId open for auction
 pub struct Registrar {
-    start_blockheight: BlockHeight,
-    reveal_blockheight: BlockHeight,
+    start_block_height: BlockHeight,
+    blocks_per_week: BlockHeight,
     auctions: HashMap<AccountId, Auction>
 }
 
 impl Registrar {
     
     /// Construct this contract and record starting block height.
-    pub fn new(auction_period: BlockHeight, reveal_period: BlockHeight) -> Self {
+    pub fn new(initial_block_height: BlockHeight, reveal_period: BlockHeight) -> Self {
         Self {
-            start_blockheight: auction_period,
-            reveal_blockheight: reveal_period,
+            start_block_height: initial_block_height,
+            blocks_per_week: reveal_period,
             auctions: HashMap::new(),
         }
     }
 
     fn isOpenForAuction(&self, account_id: AccountId) -> bool {
-        let currentBlock = env::block_index();
-        //if currentBlock - self.start_blockheight 
 
         // calculate number of weeks since auction started
-        let weeks = (env::block_index() - self.start_blockheight) % self.reveal_blockheight;
+        let current_blockheight = env::block_index();
+        let weeks = (current_blockheight - self.start_block_height) % self.blocks_per_week;
 
         // calculate account_id hash
         let mut account_hasher = DefaultHasher::new();
         account_hasher.write(account_id.as_bytes());
         let account_hash = account_hasher.finish();
-
-        //let account_hash:Vec<u64> = env::sha256(account_id.as_bytes());
 
         // check if `account_id` is not yet on the market based on `hash(account_id) % 52 > weeks from start_blockhegiht
         // if auction period expired return false
@@ -85,16 +84,43 @@ impl Registrar {
 
         return true;
     }
+
     /// Attached deposit serves as locking funds for given account name.
     /// Commitment is `hash(masked amount + salt)` in base58 encoding.
     /// bid fails if `account_id` is not yet on the market based on `hash(account_id) % 52 > weeks from start_blockhegiht`
     /// bid records a new auction if auction for this name doesn't exist yet.
     /// bid fails if auction period expired.
-    pub fn bid(&self, account_id: AccountId, commitment: Base58Hash) {
-        if Self::isOpenForAuction(self, account_id) {
+    pub fn bid(&mut self, account_id: AccountId, bidder_account_id: AccountId, commitment: Vec<u8>) -> bool {
+        let new_bid = Bid {
+            amount: 0,
+            commitment: commitment
+        };
 
+        match self.auctions.get_mut(&account_id) {
+            Some(auction) => {
+                // check if auction expired
+                let current_blockheight = env::block_index();
+                if current_blockheight - auction.start_block_height > self.blocks_per_week {
+                    return false;
+                }
+            
+                auction.bids.insert(bidder_account_id, new_bid);
+            },
+            None => {
+                if !self.isOpenForAuction(account_id.clone()) {
+                    return false;
+                }
+                let mut new_auction = Auction {
+                                    start_block_height: env::block_index(),
+                                    bids:  HashMap::new(),
+                                    reveals:  HashMap::new(),
+                                };
+                new_auction.bids.insert(bidder_account_id, new_bid);
+                self.auctions.insert(account_id, new_auction);
+            }
         }
 
+        return true;
     }
 
     /// Reveal shows the masked amount and salt. Invalid reveals are declined.
