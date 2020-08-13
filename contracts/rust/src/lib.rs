@@ -17,23 +17,19 @@
 */
 
 
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::collections::UnorderedMap;
-use near_sdk::json_types::U128;
+//use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+//use near_sdk::collections::UnorderedMap;
+//use near_sdk::json_types::U128;
 use near_sdk::json_types::Base58PublicKey;
-use near_sdk::{env, near_bindgen, wee_alloc, AccountId, Balance, Promise, StorageUsage, BlockHeight};
+use near_sdk::{env, wee_alloc, AccountId, Balance, Promise, BlockHeight};
 use std::collections::HashMap;
+use std::str;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hasher}; //Hash, 
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
-
-/// Price per 1 byte of storage from mainnet genesis config.
-const STORAGE_PRICE_PER_BYTE: Balance = 100000000000000000000;
-
-
 
 pub struct Bid {
     amount: Balance,
@@ -65,7 +61,7 @@ impl Registrar {
         }
     }
 
-    fn isOpenForAuction(&self, account_id: AccountId) -> bool {
+    fn is_open_for_auction(&self, account_id: AccountId) -> bool {
 
         // calculate number of weeks since auction started
         let current_blockheight = env::block_index();
@@ -107,7 +103,7 @@ impl Registrar {
                 auction.bids.insert(bidder_account_id, new_bid);
             },
             None => {
-                if !self.isOpenForAuction(account_id.clone()) {
+                if !self.is_open_for_auction(account_id.clone()) {
                     return false;
                 }
                 let mut new_auction = Auction {
@@ -126,21 +122,212 @@ impl Registrar {
     /// Reveal shows the masked amount and salt. Invalid reveals are declined.
     /// Reveal fails if auction is still going.
     /// Reveal fails if `hash(masked_amount + salt)` != `commitment` by env::predeccessor_account_id()`
-    pub fn reveal(account_id: AccountId, masked_amount: U128, salt: String) {
+    pub fn reveal(&mut self, account_id: AccountId, revealer_account_id: AccountId, masked_amount: Balance, salt: String) -> bool {
+        match self.auctions.get_mut(&account_id) {
+            Some(auction) => {
+                // check if auction is in progress
+                let current_blockheight = env::block_index();
+                if current_blockheight - auction.start_block_height <= self.blocks_per_week {
+                    return false;
+                }
+                // check if reveal period expired
+                if current_blockheight - auction.start_block_height > 2 * self.blocks_per_week {
+                    return false;
+                }
 
+                // check if `hash(masked_amount + salt)` != `commitment` by env::predeccessor_account_id()`
+                match auction.bids.get_mut(&revealer_account_id) {
+                    Some(bid) => {
+                        // calculate hash(masked_amount + salt)
+                        let commitment_hash = masked_amount.to_string() + &salt;
+                        let revealer_commitment = &bs58::encode(&commitment_hash).into_string();
+                        if str::from_utf8(&bid.commitment).unwrap() != revealer_commitment {
+                            return false;
+                        }
+
+                        // set the missing bid amount info
+                        bid.amount = masked_amount;
+                    }
+                    None => {
+                        return false;
+                    }
+                }
+                
+                // insert into reveal's map
+                auction.reveals.insert(revealer_account_id, masked_amount);
+            },
+            None => {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// Withdraw funds for loosing bids.
     /// Withdraw fails if account_id doesn't exist, if `env::predeccessor_account_id()` didn't bid or if auction is still in progress or not all bids were revealed yet.
     /// If not all bids were revealed but required reveal period passed, can withdraw.
-    pub fn withdraw(account_id: AccountId) {
+    pub fn withdraw(&mut self, account_id: AccountId, withdrawer_account_id: AccountId) -> bool {
+        match self.auctions.get_mut(&account_id) {
+            Some(auction) => {
+                // check if auction is in progress
+                let current_blockheight = env::block_index();
+                if current_blockheight - auction.start_block_height <= self.blocks_per_week {
+                    return false;
+                }
+
+                // check if reaveal is in progress 
+                if current_blockheight - auction.start_block_height <= 2 * self.blocks_per_week {
+                    // check if all bidders revealed themselves
+                    if auction.bids.len() != auction.reveals.len() {
+                        return false;
+                    }
+                }
+
+                // withdraw funds for loosing bid
+                match auction.bids.get_mut(&withdrawer_account_id) {
+                    Some(_bid) => {
+                        // withdraw/unlock funds/transfer? the bid.amount
+                    }
+                    None => {
+                        return false;
+                    }
+                }
+            }
+            None => {
+                return false;
+            }
+        }
+        return true;
 
     }
 
     /// Creates the new name with given public key for the winer.
-    pub fn claim(account_id: AccountId, public_key: Base58PublicKey) {
+    pub fn claim(&mut self, account_id: AccountId, public_key: Base58PublicKey) -> bool {
+        let mut winning_account_id: AccountId = "".to_string();
+        let mut second_highest_bid: Balance = 0;
+        match self.auctions.get_mut(&account_id) {
+            Some(auction) => {
+                // check if auction is in progress
+                let current_blockheight = env::block_index();
+                if current_blockheight - auction.start_block_height <= self.blocks_per_week {
+                    return false;
+                }
 
+                // check if reaveal is in progress 
+                if current_blockheight - auction.start_block_height <= 2 * self.blocks_per_week {
+                    // check if all bidders revealed themselves
+                    if auction.bids.len() != auction.reveals.len() {
+                        return false;
+                    }
+                }
+
+                // get the second highest bid
+                let mut highest_bid: Balance = 0;
+                let mut is_first_check: bool = true;
+                for (revealer_account_id, revealer_balance) in &auction.reveals {
+
+                    // set the highest_bid as the first map entry
+                    if is_first_check {
+                        highest_bid = *revealer_balance;
+                        is_first_check = false;
+                        winning_account_id = revealer_account_id.to_string();
+                        continue;
+                    }
+
+                    if *revealer_balance > second_highest_bid {
+                        second_highest_bid = *revealer_balance;
+
+                        if highest_bid < second_highest_bid {
+                            let temp = highest_bid;
+                            highest_bid = second_highest_bid;
+                            second_highest_bid = temp;
+                        }
+                        winning_account_id = revealer_account_id.to_string();
+                    }
+                }
+
+                // if second_highest_bid = 0, use the heighest_bid 
+                if second_highest_bid == 0 {
+                    // of highest_bid = 0 return false
+                    if highest_bid == 0 {
+                        return false;
+                    } else {
+                        // TODO: uncomment if needed
+                        // second_highest_bid = highest_bid;
+                    }
+                } 
+            }
+            None => {
+                return false;
+            }
+        }
+
+        if winning_account_id == env::predecessor_account_id() {
+            // TODO: burn the locked amount
+
+            // creates the new name with given public key for the winer
+            let key = Base58PublicKey::from(public_key);
+            let p1 = Promise::new(account_id.to_string()).create_account();
+            let p2 = Promise::new(account_id.to_string()).add_full_access_key(key.0);
+            p1.then(p2);
+        }
+        
+        return true;
     }
+}
+
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod tests {
+    use near_sdk::MockedBlockchain;
+    use near_sdk::{testing_env, VMContext};
+
+    use super::*;
+
+    fn alice() -> AccountId {
+        "alice.near".to_string()
+    }
+    fn bob() -> AccountId {
+        "bob.near".to_string()
+    }
+    fn carol() -> AccountId {
+        "carol.near".to_string()
+    }
+    fn auctioned_id() -> AccountId {
+        "auctioned_id1.near".to_string()
+    }
+
+    fn get_context(predecessor_account_id: AccountId) -> VMContext {
+        VMContext {
+            current_account_id: alice(),
+            signer_account_id: bob(),
+            signer_account_pk: vec![0, 1, 2],
+            predecessor_account_id,
+            input: vec![],
+            block_index: 0,
+            block_timestamp: 0,
+            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_locked_balance: 0,
+            storage_usage: 10u64.pow(6),
+            attached_deposit: 0,
+            prepaid_gas: 10u64.pow(18),
+            random_seed: vec![0, 1, 2],
+            is_view: false,
+            output_data_receivers: vec![],
+            epoch_height: 0,
+        }
+    }
+
+    #[test]
+    fn test_initialize_new_registrar_and_bid() {
+        let context = get_context(carol());
+        testing_env!(context);
+        let mut contract = Registrar::new(1, 100);
+        let commitment = "test1test2test3hashCommitment";
+        assert_eq!(contract.bid(auctioned_id(), alice(), commitment.as_bytes().to_vec()), true);
+    }
+
 }
 
 
@@ -148,12 +335,7 @@ impl Registrar {
 
 
 
-
-
-
-
-
-
+/*
 /// Contains balance and allowances information for one account.
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct Account {
@@ -722,3 +904,4 @@ mod tests {
         );
     }
 }
+*/
