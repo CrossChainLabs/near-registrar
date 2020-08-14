@@ -1,32 +1,26 @@
 /**
-* Fungible Token implementation with JSON serialization.
+* Top level account names (TLAs) are very valuable as they provide root of trust and discoverability for 
+* companies, applications and users. To allow for fair access to them, the top level account names that 
+* are shorter than MIN_ALLOWED_TOP_LEVEL_ACCOUNT_LENGTH characters (32 at time of writing) will be auctioned off.
 * NOTES:
-*  - The maximum balance value is limited by U128 (2**128 - 1).
-*  - JSON calls should pass U128 as a base-10 string. E.g. "100".
-*  - The contract optimizes the inner trie structure by hashing account IDs. It will prevent some
-*    abuse of deep tries. Shouldn't be an issue, once NEAR clients implement full hashing of keys.
-*  - The contract tracks the change in storage before and after the call. If the storage increases,
-*    the contract requires the caller of the contract to attach enough deposit to the function call
-*    to cover the storage cost.
-*    This is done to prevent a denial of service attack on the contract by taking all available storage.
-*    If the storage decreases, the contract will issue a refund for the cost of the released storage.
-*    The unused tokens from the attached deposit are also refunded, so it's safe to
-*    attach more deposit than required.
-*  - To prevent the deployed contract from being modified or deleted, it should not have any access
-*    keys on its account.
+*  - Each week’s account names—such that hash(account_id) % 52 is equal to the week since the launch of the 
+*    auction—will open for bidding. 
+*  - Auctions will run for seven days after the first bid, and anyone can bid for a given name. 
+*  - A bid consists of a bid and mask, allowing the bidder to hide the amount that they are bidding. 
+*  - After the seven days run out, participants must reveal their bid and mask within the next seven days.
+*  - The winner of the auction pays the second-largest price.
+*  - Proceeds of the auctions then get burned by the naming contract, benefiting all the token holders.
+*  - Done: account was claimed and created, the auction is done and all state will be cleared except that 
+*    this name is in done collection. On claim also withdraws all other bids automatically.
 */
 
-
-//use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-//use near_sdk::collections::UnorderedMap;
-//use near_sdk::json_types::U128;
 use near_sdk::json_types::Base58PublicKey;
 use near_sdk::{env, wee_alloc, AccountId, Balance, Promise, BlockHeight};
 use std::collections::HashMap;
 use std::str;
 
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hasher}; //Hash, 
+use std::hash::{Hasher}; 
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -36,49 +30,32 @@ pub struct Bid {
     commitment: Vec<u8>
 }
 
-// AccountId of the bidder
+// AccountId of the bidder and AccountId of the revealer
 pub struct Auction {
     start_block_height: BlockHeight,
     bids: HashMap<AccountId, Bid>,
     reveals: HashMap<AccountId, Balance>,
 }
 
-// AccountId open for auction
+// AccountId that is auctioned
 pub struct Registrar {
     start_block_height: BlockHeight,
-    blocks_per_week: BlockHeight,
+    auction_period: BlockHeight,
+    reveal_period: BlockHeight,
     auctions: HashMap<AccountId, Auction>
 }
 
-impl Registrar {
-    
+impl Registrar {  
     /// Construct this contract and record starting block height.
-    pub fn new(initial_block_height: BlockHeight, reveal_period: BlockHeight) -> Self {
+    /// auction_period represents the number of blocks an auction can take, aproximately 7 days
+    /// reveal_period represents the number of blocks the reveal period can take, aproximately 7 days
+    pub fn new(auction_period: BlockHeight, reveal_period: BlockHeight) -> Self {
         Self {
-            start_block_height: initial_block_height,
-            blocks_per_week: reveal_period,
+            start_block_height: env::block_index(),
+            auction_period: auction_period,
+            reveal_period: reveal_period,
             auctions: HashMap::new(),
         }
-    }
-
-    fn is_open_for_auction(&self, account_id: AccountId) -> bool {
-
-        // calculate number of weeks since auction started
-        let current_blockheight = env::block_index();
-        let weeks = (current_blockheight - self.start_block_height) % self.blocks_per_week;
-
-        // calculate account_id hash
-        let mut account_hasher = DefaultHasher::new();
-        account_hasher.write(account_id.as_bytes());
-        let account_hash = account_hasher.finish();
-
-        // check if `account_id` is not yet on the market based on `hash(account_id) % 52 > weeks from start_blockhegiht
-        // if auction period expired return false
-        if account_hash % 52 > weeks {
-            return false;
-        }
-
-        return true;
     }
 
     /// Attached deposit serves as locking funds for given account name.
@@ -86,26 +63,53 @@ impl Registrar {
     /// bid fails if `account_id` is not yet on the market based on `hash(account_id) % 52 > weeks from start_blockhegiht`
     /// bid records a new auction if auction for this name doesn't exist yet.
     /// bid fails if auction period expired.
-    pub fn bid(&mut self, account_id: AccountId, bidder_account_id: AccountId, commitment: Vec<u8>) -> bool {
+    pub fn bid(&mut self, account_id: AccountId, commitment: Vec<u8>) -> bool {
         let new_bid = Bid {
             amount: 0,
             commitment: commitment
         };
 
+        let bidder_account_id: AccountId = env::predecessor_account_id();
+        println!("bidder_account_id = {}", &bidder_account_id.to_string());
+
         match self.auctions.get_mut(&account_id) {
             Some(auction) => {
                 // check if auction expired
                 let current_blockheight = env::block_index();
-                if current_blockheight - auction.start_block_height > self.blocks_per_week {
+                if current_blockheight - auction.start_block_height > self.auction_period {
                     return false;
                 }
             
+                // insert into bids map
                 auction.bids.insert(bidder_account_id, new_bid);
             },
-            None => {
-                if !self.is_open_for_auction(account_id.clone()) {
+            None => {        
+                let current_blockheight = env::block_index();
+
+              /*  println!("current_blockheight = {}", &current_blockheight.to_string());
+                println!("start_block_height = {}", &self.start_block_height.to_string());
+                println!("auction_period = {}", &self.auction_period.to_string());
+                */
+
+                // calculate number of weeks since auction started
+                let weeks = (current_blockheight - self.start_block_height) / self.auction_period;
+
+                // calculate account_id hash
+                let mut account_hasher = DefaultHasher::new();
+                account_hasher.write(account_id.as_bytes());
+                let account_hash = account_hasher.finish();
+
+              /*  println!("account_hash = {}", &account_hash.to_string());
+                println!("account_hash % 52 = {}", (account_hash % 52).to_string());
+                println!("weeks = {}", &weeks.to_string());
+                */
+
+                // check if account_id is open for auction
+                if account_hash % 52 > weeks {
                     return false;
                 }
+
+                // insert this new auction to auction list
                 let mut new_auction = Auction {
                                     start_block_height: env::block_index(),
                                     bids:  HashMap::new(),
@@ -122,16 +126,17 @@ impl Registrar {
     /// Reveal shows the masked amount and salt. Invalid reveals are declined.
     /// Reveal fails if auction is still going.
     /// Reveal fails if `hash(masked_amount + salt)` != `commitment` by env::predeccessor_account_id()`
-    pub fn reveal(&mut self, account_id: AccountId, revealer_account_id: AccountId, masked_amount: Balance, salt: String) -> bool {
+    pub fn reveal(&mut self, account_id: AccountId, masked_amount: Balance, salt: String) -> bool {
+        let revealer_account_id: AccountId = env::predecessor_account_id();
         match self.auctions.get_mut(&account_id) {
             Some(auction) => {
                 // check if auction is in progress
                 let current_blockheight = env::block_index();
-                if current_blockheight - auction.start_block_height <= self.blocks_per_week {
+                if current_blockheight - auction.start_block_height <= self.auction_period {
                     return false;
                 }
                 // check if reveal period expired
-                if current_blockheight - auction.start_block_height > 2 * self.blocks_per_week {
+                if current_blockheight - auction.start_block_height > self.auction_period + self.reveal_period {
                     return false;
                 }
 
@@ -166,18 +171,18 @@ impl Registrar {
     /// Withdraw funds for loosing bids.
     /// Withdraw fails if account_id doesn't exist, if `env::predeccessor_account_id()` didn't bid or if auction is still in progress or not all bids were revealed yet.
     /// If not all bids were revealed but required reveal period passed, can withdraw.
-    pub fn withdraw(&mut self, account_id: AccountId, withdrawer_account_id: AccountId) -> bool {
+    pub fn withdraw(&mut self, account_id: AccountId) -> bool {
+        let withdrawer_account_id: AccountId = env::predecessor_account_id();
         match self.auctions.get_mut(&account_id) {
             Some(auction) => {
-                // check if auction is in progress
+                // return if the auction is in progress 
                 let current_blockheight = env::block_index();
-                if current_blockheight - auction.start_block_height <= self.blocks_per_week {
+                if current_blockheight - auction.start_block_height <= self.auction_period {
                     return false;
                 }
 
-                // check if reaveal is in progress 
-                if current_blockheight - auction.start_block_height <= 2 * self.blocks_per_week {
-                    // check if all bidders revealed themselves
+                // return if reveal is in progress and not all bidders revealed themselves
+                if current_blockheight - auction.start_block_height <= self.auction_period + self.reveal_period {
                     if auction.bids.len() != auction.reveals.len() {
                         return false;
                     }
@@ -186,7 +191,7 @@ impl Registrar {
                 // withdraw funds for loosing bid
                 match auction.bids.get_mut(&withdrawer_account_id) {
                     Some(_bid) => {
-                        // withdraw/unlock funds/transfer? the bid.amount
+                        // transfer back the bid.amount
                     }
                     None => {
                         return false;
@@ -209,12 +214,12 @@ impl Registrar {
             Some(auction) => {
                 // check if auction is in progress
                 let current_blockheight = env::block_index();
-                if current_blockheight - auction.start_block_height <= self.blocks_per_week {
+                if current_blockheight - auction.start_block_height <= self.auction_period {
                     return false;
                 }
 
                 // check if reaveal is in progress 
-                if current_blockheight - auction.start_block_height <= 2 * self.blocks_per_week {
+                if current_blockheight - auction.start_block_height <= self.auction_period + self.reveal_period {
                     // check if all bidders revealed themselves
                     if auction.bids.len() != auction.reveals.len() {
                         return false;
@@ -241,8 +246,8 @@ impl Registrar {
                             let temp = highest_bid;
                             highest_bid = second_highest_bid;
                             second_highest_bid = temp;
-                        }
-                        winning_account_id = revealer_account_id.to_string();
+                            winning_account_id = revealer_account_id.to_string();
+                        }                     
                     }
                 }
 
@@ -255,14 +260,16 @@ impl Registrar {
                         // TODO: uncomment if needed
                         // second_highest_bid = highest_bid;
                     }
-                } 
+                }
             }
             None => {
                 return false;
             }
         }
 
-        if winning_account_id == env::predecessor_account_id() {
+        let claimer_account_id: AccountId = env::predecessor_account_id();
+
+        if winning_account_id == claimer_account_id {
             // TODO: burn the locked amount
 
             // creates the new name with given public key for the winer
@@ -270,6 +277,8 @@ impl Registrar {
             let p1 = Promise::new(account_id.to_string()).create_account();
             let p2 = Promise::new(account_id.to_string()).add_full_access_key(key.0);
             p1.then(p2);
+
+            //TODO: withdraw all other bids automatically.
         }
         
         return true;
@@ -305,7 +314,7 @@ mod tests {
             signer_account_pk: vec![0, 1, 2],
             predecessor_account_id,
             input: vec![],
-            block_index: 0,
+            block_index: 2,
             block_timestamp: 0,
             account_balance: 1_000_000_000_000_000_000_000_000_000u128,
             account_locked_balance: 0,
@@ -319,13 +328,52 @@ mod tests {
         }
     }
 
+    fn get_context2(predecessor_account_id: AccountId) -> VMContext {
+        VMContext {
+            current_account_id: alice(),
+            signer_account_id: bob(),
+            signer_account_pk: vec![0, 1, 2],
+            predecessor_account_id,
+            input: vec![],
+            block_index: 1321,
+            block_timestamp: 0,
+            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_locked_balance: 0,
+            storage_usage: 10u64.pow(6),
+            attached_deposit: 0,
+            prepaid_gas: 10u64.pow(18),
+            random_seed: vec![0, 1, 2],
+            is_view: false,
+            output_data_receivers: vec![],
+            epoch_height: 0,
+        }
+    }
+
+
     #[test]
+
     fn test_initialize_new_registrar_and_bid() {
         let context = get_context(carol());
         testing_env!(context);
-        let mut contract = Registrar::new(1, 100);
+        let mut contract = Registrar::new(30, 35);
+
+        let context2 = get_context2(carol());
+        testing_env!(context2);
         let commitment = "test1test2test3hashCommitment";
-        assert_eq!(contract.bid(auctioned_id(), alice(), commitment.as_bytes().to_vec()), true);
+        assert_eq!(contract.bid(auctioned_id(), commitment.as_bytes().to_vec()), true);
+    }
+
+    #[test]
+
+    fn test_another_bid() {
+        let context = get_context(bob());
+        testing_env!(context);
+        let mut contract = Registrar::new(30, 35);
+
+        let context2 = get_context2(bob());
+        testing_env!(context2);
+        let commitment = "test1test2test3hashCommitment";
+        assert_eq!(contract.bid(auctioned_id(), commitment.as_bytes().to_vec()), true);
     }
 
 }
