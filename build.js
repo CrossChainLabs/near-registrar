@@ -9,7 +9,7 @@ sh.cd(__dirname)
 // Note: see flags in ./cargo/config
 sh.exec('cargo build --target wasm32-unknown-unknown --release')
 
-const outdir = '../../out'
+const outdir = './out'
 sh.mkdir('-p', outdir)
 
 sh.ls('./target/wasm32-unknown-unknown/release/*.wasm').map(src => {
