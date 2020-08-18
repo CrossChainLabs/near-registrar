@@ -1,5 +1,5 @@
 [package]
-name = "nep21-basic"
+name = "near-registrar"
 version = "0.1.0"
 authors = ["Near Inc <hello@near.org>"]
 edition = "2018"
