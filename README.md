@@ -1,11 +1,9 @@
 Top level accounts (TLAs)
 ==============================
 
-# Top Level Account Registrar
-
 This is an implementation in rust for Top Level Account Registrar.
 
-This repository includes TLA implementation in Rust (https://github.com/near/core-contracts/issues/25)
+This repository includes TLAs implementation in Rust (https://github.com/near/core-contracts/issues/25)
 
 Top level account names (TLAs) are very valuable as they provide root of trust and discoverability for 
 companies, applications and users. To allow for fair access to them, the top level account names that 
