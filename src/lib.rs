@@ -153,7 +153,6 @@ impl Registrar {
                         // calculate hash(masked_amount + salt)
                         let commitment_hash = masked_amount.to_string() + &salt;
                         let revealer_commitment = &bs58::encode(&commitment_hash).into_string();
-                        println!("revealer_commitment = {}", revealer_commitment.to_string());
                         if str::from_utf8(&bid.commitment).unwrap() != revealer_commitment {
                             return false;
                         }
@@ -201,15 +200,8 @@ impl Registrar {
                     Some(bid) => {
                         // transfer back the bid.amount
                         if bid.amount > 0 {
-                            //println!("withdrawer_account_id = {}", withdrawer_account_id.to_string());
-                            //println!("bid.amount = {}", bid.amount.to_string());
-                            
-                            //println!("contract balance before transfer = {}", env::account_balance().to_string());
                             Promise::new(withdrawer_account_id.to_string()).transfer(bid.amount);
-                            bid.amount = 0;
-                            //println!("contract balance after transfer = {}", env::account_balance().to_string());
-
-                            
+                            bid.amount = 0;    
                         }
                     }
                     None => {
@@ -286,19 +278,14 @@ impl Registrar {
                     return false;
                 }
 
-                println!("winning_account_id = {}", winning_account_id.to_string());
-                println!("second_highest_bid = {}", second_highest_bid.to_string());
-
-                // TODO: burn the locked amount
+                // TODO: burn the second_highest_bid
 
                 // creates the new name with given public key for the winer
                 let key = Base58PublicKey::from(public_key);
                 let p1 = Promise::new(account_id.to_string()).create_account();
                 let p2 = Promise::new(account_id.to_string()).add_full_access_key(key.0);
                 p1.then(p2);
-
-                println!("contract balance before transfer = {}", env::account_balance().to_string());
-
+                
                 // withdraw all other bids automatically
                 for (bidder_account_id, bid) in auction.bids.iter_mut() {
                     if &claimer_account_id != bidder_account_id {
