@@ -21,8 +21,8 @@ To run this project locally:
 
 Now you can run all the [rust]-related scripts listed in `package.json`! Scripts you might want to start with:
 
-- `yarn test:unit:rs`: Runs all Rust tests in the project
-- `yarn build:rs`: Compiles the Rust contracts to [Wasm] binaries
+- `yarn test`: Runs all Rust tests in the project
+- `yarn build`: Compiles the Rust contracts to [Wasm] binaries
 
 ## Data collection
 

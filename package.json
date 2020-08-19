@@ -5,7 +5,8 @@
   "author": "Near, Inc. <hello@near.org>",
   "license": "(MIT AND Apache-2.0)",
   "scripts": {
-    "build": "yarn ./build.js",
+    "build": "yarn build:rs",
+    "build:rs" : "./build.js",
     "clean": "rm -rf ./out && cargo clean)",
     "test": "cargo test -- --nocapture --color always"
   },

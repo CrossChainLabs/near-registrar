@@ -100,7 +100,7 @@ impl Registrar {
                 // calculate account_id hash
                 let mut account_hasher = DefaultHasher::new();
                 account_hasher.write(account_id.as_bytes());
-                let account_hash = account_hasher.finish();   
+                let account_hash = account_hasher.finish();  
 
                 // check if account_id is open for auction
                 if weeks != account_hash % 52 {
@@ -153,6 +153,7 @@ impl Registrar {
                         // calculate hash(masked_amount + salt)
                         let commitment_hash = masked_amount.to_string() + &salt;
                         let revealer_commitment = &bs58::encode(&commitment_hash).into_string();
+                        println!("revealer_commitment = {}", revealer_commitment.to_string());
                         if str::from_utf8(&bid.commitment).unwrap() != revealer_commitment {
                             return false;
                         }
@@ -200,8 +201,15 @@ impl Registrar {
                     Some(bid) => {
                         // transfer back the bid.amount
                         if bid.amount > 0 {
+                            //println!("withdrawer_account_id = {}", withdrawer_account_id.to_string());
+                            //println!("bid.amount = {}", bid.amount.to_string());
+                            
+                            //println!("contract balance before transfer = {}", env::account_balance().to_string());
                             Promise::new(withdrawer_account_id.to_string()).transfer(bid.amount);
                             bid.amount = 0;
+                            //println!("contract balance after transfer = {}", env::account_balance().to_string());
+
+                            
                         }
                     }
                     None => {
@@ -218,6 +226,7 @@ impl Registrar {
     }
 
     /// Creates the new name with given public key for the winer.
+    /// The winner of the auction pays the second-highest price.
     pub fn claim(&mut self, account_id: AccountId, public_key: Base58PublicKey) -> bool {
         let mut winning_account_id: AccountId = "".to_string();
         let mut second_highest_bid: Balance = 0;
@@ -262,16 +271,13 @@ impl Registrar {
                     }
                 }
                 
-                // if second_highest_bid = 0, nobody wins
+                // if second_highest_bid is 0 and highest_bid is greater, then second_highest_bid takes the value of highest_bid
                 if second_highest_bid == 0 {
-                    return false;
-
-                    // TODO: uncomment if the second_highest_bid should take the value of the highest_bid in case the second_highest_bid is 0
-                    /*if highest_bid == 0 {
+                    // if second_highest_bid and highest_bid are 0, return false
+                    if highest_bid == 0 {
                         return false;
-                    } else {     
-                        second_highest_bid = highest_bid;
-                    }*/
+                    }   
+                    second_highest_bid = highest_bid;
                 }
 
                 // check if the claimer is also the winner
@@ -280,13 +286,18 @@ impl Registrar {
                     return false;
                 }
 
-                // TODO: burn the locked amount, which is
+                println!("winning_account_id = {}", winning_account_id.to_string());
+                println!("second_highest_bid = {}", second_highest_bid.to_string());
+
+                // TODO: burn the locked amount
 
                 // creates the new name with given public key for the winer
                 let key = Base58PublicKey::from(public_key);
                 let p1 = Promise::new(account_id.to_string()).create_account();
                 let p2 = Promise::new(account_id.to_string()).add_full_access_key(key.0);
                 p1.then(p2);
+
+                println!("contract balance before transfer = {}", env::account_balance().to_string());
 
                 // withdraw all other bids automatically
                 for (bidder_account_id, bid) in auction.bids.iter_mut() {
@@ -298,6 +309,8 @@ impl Registrar {
                         }
                     }
                 }
+
+                println!("contract balance after transfer = {}", env::account_balance().to_string());
             }
             None => {
                 return false;
@@ -338,7 +351,7 @@ mod tests {
             input: vec![],
             block_index: 2,
             block_timestamp: 0,
-            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_balance: 3123,
             account_locked_balance: 0,
             storage_usage: 10u64.pow(6),
             attached_deposit: 0,
@@ -359,7 +372,7 @@ mod tests {
             input: vec![],
             block_index: 1292,
             block_timestamp: 0,
-            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_balance: 3123,
             account_locked_balance: 0,
             storage_usage: 10u64.pow(6),
             attached_deposit: 0,
@@ -380,7 +393,7 @@ mod tests {
             input: vec![],
             block_index: 4,
             block_timestamp: 0,
-            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_balance: 3123,
             account_locked_balance: 0,
             storage_usage: 10u64.pow(6),
             attached_deposit: 0,
@@ -401,7 +414,7 @@ mod tests {
             input: vec![],
             block_index: 1322,
             block_timestamp: 0,
-            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_balance: 2123,
             account_locked_balance: 0,
             storage_usage: 10u64.pow(6),
             attached_deposit: 1000,
@@ -422,7 +435,7 @@ mod tests {
             input: vec![],
             block_index: 1357,
             block_timestamp: 0,
-            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_balance: 2123,
             account_locked_balance: 0,
             storage_usage: 10u64.pow(6),
             attached_deposit: 1000,
@@ -443,7 +456,7 @@ mod tests {
             input: vec![],
             block_index: 1322,
             block_timestamp: 0,
-            account_balance: 1_000_000_000_000_000_000_000_000_000u128,
+            account_balance: 1234,
             account_locked_balance: 0,
             storage_usage: 10u64.pow(6),
             attached_deposit: 1005,
@@ -455,8 +468,29 @@ mod tests {
         }
     }
 
+    fn get_context7(predecessor_account_id: AccountId) -> VMContext {
+        VMContext {
+            current_account_id: alice(),
+            signer_account_id: bob(),
+            signer_account_pk: vec![0, 1, 2],
+            predecessor_account_id,
+            input: vec![],
+            block_index: 1322,
+            block_timestamp: 0,
+            account_balance: 1234,
+            account_locked_balance: 0,
+            storage_usage: 10u64.pow(6),
+            attached_deposit: 0,
+            prepaid_gas: 10u64.pow(18),
+            random_seed: vec![0, 1, 2],
+            is_view: false,
+            output_data_receivers: vec![],
+            epoch_height: 0,
+        }
+    }
+
     #[test]
-    fn test_initialize_new_registrar_and_bid() {
+    fn bid_with_commitment() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -468,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn test_another_bid() {
+    fn account_id_is_open_for_auction() {
         let context = get_context(bob());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -480,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn test_account_id_is_not_open_for_auction1() {
+    fn is_not_open_for_auction_min() {
         let context = get_context(alice());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -492,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn test_account_id_is_not_open_for_auction2() {
+    fn is_not_open_for_auction_max() {
         let context = get_context(alice());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -504,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bidder_already_bid() {
+    fn bidder_already_bid() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -520,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn test_auction_is_expired() {
+    fn auction_is_expired() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -539,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reveal() {
+    fn reveal_the_amount() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -560,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dont_reveal_if_auction_in_progress() {
+    fn dont_reveal_if_auction_in_progress() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -578,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_after_all_revealed() {
+    fn withdraw_after_all_revealed() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -611,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_after_reveal_expired() {
+    fn withdraw_after_reveal_period_expired() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -635,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_but_reveal_in_progress() {
+    fn withdraw_when_reveal_in_progress() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -653,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_but_reveal_in_progress_and_not_all_bidders_revealed() {
+    fn withdraw_but_reveal_in_progress_and_not_all_bidders_revealed() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -679,7 +713,163 @@ mod tests {
         assert_eq!(contract.withdraw(auctioned_id()), false);
     }
 
-    // TODO: check if withdrawer balance is ok
-    // TODO: continue with claim
+    #[test]
+    fn check_contract_balance_after_multiple_withdraws() {
+        let context = get_context(carol());
+        testing_env!(context);
+        let mut contract = Registrar::new(30, 35);
+
+        let context2 = get_context2(carol());
+        testing_env!(context2);
+        let commitment = "2s7YSBAHei";
+
+        if !contract.bid(auctioned_id(), commitment.as_bytes().to_vec()) {
+            assert!(false);
+        }
+
+        let context3 = get_context4(carol());
+        testing_env!(context3);
+
+        let masked_amount: Balance = 1000;
+        let salt: String = "123".to_string();
+        if !contract.reveal(auctioned_id(), masked_amount, salt) {
+            assert!(false);
+        }
+
+        if !contract.reveal(auctioned_id(), masked_amount, "123".to_string()) {
+            assert!(false);
+        }
+        
+        if !contract.withdraw(auctioned_id()) {
+            assert!(false);
+        }
+
+        assert_eq!( env::account_balance() == 2123, true);
+    }
+
+    #[test]
+    fn claim_the_account() {
+        let context = get_context(carol());
+        testing_env!(context);
+        let mut contract = Registrar::new(30, 35);
+
+        let context2 = get_context2(carol());
+        testing_env!(context2);
+        let commitment = "2s7YSBAHei";
+        if !contract.bid(auctioned_id(), commitment.as_bytes().to_vec()) {
+            assert!(false);
+        }
+
+        let context3 = get_context2(bob());
+        testing_env!(context3);
+        let commitment2 = "2s7YSJaE4S";
+        if !contract.bid(auctioned_id(), commitment2.as_bytes().to_vec()) {
+            assert!(false);
+        }
+
+        let context4 = get_context4(carol());
+        testing_env!(context4);
+        let masked_amount: Balance = 1000;
+        let salt: String = "123".to_string();
+        if !contract.reveal(auctioned_id(), masked_amount, salt) {
+            assert!(false);
+        }
+
+        let context5 = get_context6(bob());
+        testing_env!(context5);
+        let masked_amount2: Balance = 1005;
+        let salt2: String = "123".to_string();
+        if !contract.reveal(auctioned_id(), masked_amount2, salt2){
+            assert!(false);
+        }
+
+        if !contract.claim(auctioned_id(), Base58PublicKey("ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp".as_bytes().to_vec())) {
+            assert!(false);
+        }
+
+        assert_eq!( env::account_balance() == 1239, true);
+    }
+
+    #[test]
+    fn claim_fails_if_the_highest_bid_is_0() {
+        let context = get_context(carol());
+        testing_env!(context);
+        let mut contract = Registrar::new(30, 35);
+
+        let context2 = get_context2(carol());
+        testing_env!(context2);
+        let commitment = "2ESvwk";
+        if !contract.bid(auctioned_id(), commitment.as_bytes().to_vec()) {
+            assert!(false);
+        }
+
+        let context3 = get_context2(bob());
+        testing_env!(context3);
+        let commitment2 = "2ESvwk";
+        if !contract.bid(auctioned_id(), commitment2.as_bytes().to_vec()) {
+            assert!(false);
+        }
+
+        let context4 = get_context7(carol());
+        testing_env!(context4);
+        let masked_amount: Balance = 0;
+        let salt: String = "123".to_string();
+        if !contract.reveal(auctioned_id(), masked_amount, salt) {
+            assert!(false);
+        }
+
+        let context5 = get_context7(bob());
+        testing_env!(context5);
+        let masked_amount2: Balance = 0;
+        let salt2: String = "123".to_string();
+        if !contract.reveal(auctioned_id(), masked_amount2, salt2){
+            assert!(false);
+        }
+
+        assert_eq!(contract.claim(auctioned_id(), Base58PublicKey("ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp".as_bytes().to_vec())), false);
+    }
+
+    #[test]
+    fn claim_winner_pays_highest_bid_if_second_highest_bid_is_0() {
+        let context = get_context(carol());
+        testing_env!(context);
+        let mut contract = Registrar::new(30, 35);
+
+        let context2 = get_context2(carol());
+        testing_env!(context2);
+        let commitment = "2ESvwk";
+        if !contract.bid(auctioned_id(), commitment.as_bytes().to_vec()) {
+            assert!(false);
+        }
+
+        let context3 = get_context2(bob());
+        testing_env!(context3);
+        let commitment2 = "2s7YSJaE4S";
+        if !contract.bid(auctioned_id(), commitment2.as_bytes().to_vec()) {
+            assert!(false);
+        }
+
+        let context4 = get_context7(carol());
+        testing_env!(context4);
+        let masked_amount: Balance = 0;
+        let salt: String = "123".to_string();
+        if !contract.reveal(auctioned_id(), masked_amount, salt) {
+            assert!(false);
+        }
+
+        let context5 = get_context6(bob());
+        testing_env!(context5);
+        let masked_amount2: Balance = 1005;
+        let salt2: String = "123".to_string();
+        if !contract.reveal(auctioned_id(), masked_amount2, salt2){
+            assert!(false);
+        }
+
+        if !contract.claim(auctioned_id(), Base58PublicKey("ed25519:6E8sCci9badyRkXb3JoRpBj5p8C6Tw41ELDZoiihKEtp".as_bytes().to_vec())) {
+            assert!(false);
+        }
+
+        assert_eq!( env::account_balance() == 2239, true);
+    }
 }
 
