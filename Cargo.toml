@@ -20,3 +20,6 @@ panic = "abort"
 
 [dependencies.bs58]
 version = "0.3"
+
+[dependencies.borsh]
+version = "0.7.0"
