@@ -15,7 +15,7 @@
 */
 
 use near_sdk::json_types::Base58PublicKey;
-use near_sdk::{env, wee_alloc, AccountId, Balance, Promise, BlockHeight};
+use near_sdk::{env, near_bindgen, wee_alloc, AccountId, Balance, Promise, BlockHeight};
 use near_sdk::collections::UnorderedMap;
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::str;
@@ -40,6 +40,7 @@ pub struct Auction {
     reveals: UnorderedMap<AccountId, Balance>,
 }
 
+#[derive(BorshSerialize, BorshDeserialize)]
 // AccountId that is auctioned
 pub struct Registrar {
     start_block_height: BlockHeight,
@@ -48,6 +49,7 @@ pub struct Registrar {
     auctions: UnorderedMap<AccountId, Auction>
 }
 
+#[near_bindgen]
 impl Registrar {  
     /// Construct this contract and record starting block height.
     /// auction_period represents the number of blocks an auction can take, aproximately 7 days
@@ -57,7 +59,7 @@ impl Registrar {
             start_block_height: env::block_index(),
             auction_period: auction_period,
             reveal_period: reveal_period,
-            auctions: UnorderedMap::default()//new(b"a".to_vec()),
+            auctions: UnorderedMap::new(b"a".to_vec()),
         }
     }
 
@@ -76,12 +78,16 @@ impl Registrar {
 
         // get the auction that match the account id, from the map
         let start_block_height: BlockHeight = 0;
-        let bids: UnorderedMap<AccountId, Bid> = UnorderedMap::default();
-        let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::default();
-        let empty_auction = Auction{ start_block_height, bids, reveals };            
+        let account_hash = env::sha256(account_id.as_bytes());
+        let mut bids_prefix = account_hash.clone();
+        bids_prefix.extend_from_slice(b":b");
+        let bids: UnorderedMap<AccountId, Bid> = UnorderedMap::new(bids_prefix);
+        let mut reveals_prefix = account_hash;
+        reveals_prefix.extend_from_slice(b":r");
+        let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::new(reveals_prefix);
+        let empty_auction = Auction{ start_block_height, bids, reveals };
         let mut auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
 
-        println!(" auction.start_block_height = {}", auction.start_block_height);
         // if there is an auction, insert the new bid to map
         if auction.start_block_height != 0 {
             // check if auction expired
@@ -101,6 +107,9 @@ impl Registrar {
    
             // insert into bids map
             auction.bids.insert(&bidder_account_id, &new_bid);
+
+            // restore the in-memory copy
+            self.auctions.insert(&account_id, &auction);
         } else {      
             let current_blockheight = env::block_index();          
 
@@ -120,8 +129,8 @@ impl Registrar {
             // insert this new auction to auction list
             let mut new_auction = Auction {
                                 start_block_height: env::block_index(),
-                                bids: UnorderedMap::default(),
-                                reveals: UnorderedMap::default(),
+                                bids: UnorderedMap::new(b"b".to_vec()),
+                                reveals: UnorderedMap::new(b"r".to_vec()),
                             };
             new_auction.bids.insert(&bidder_account_id, &new_bid);
             self.auctions.insert(&account_id, &new_auction);       
@@ -146,8 +155,13 @@ impl Registrar {
         
         // get the auction that match the account id, from the map
         let start_block_height: BlockHeight = 0;
-        let bids: UnorderedMap<AccountId, Bid> = UnorderedMap::default();
-        let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::default();
+        let account_hash = env::sha256(account_id.as_bytes());
+        let mut bids_prefix = account_hash.clone();
+        bids_prefix.extend_from_slice(b":b");
+        let bids: UnorderedMap<AccountId, Bid> = UnorderedMap::new(bids_prefix);
+        let mut reveals_prefix = account_hash;
+        reveals_prefix.extend_from_slice(b":r");
+        let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::new(reveals_prefix);
         let empty_auction = Auction{ start_block_height, bids, reveals };
         let mut auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
 
@@ -169,9 +183,7 @@ impl Registrar {
             let amount = 0;
             let commitment: Vec<u8> = Vec::new();
             let empty_bid: Bid = Bid { amount, commitment };
-
             let mut bid = auction.bids.get(&revealer_account_id).unwrap_or(empty_bid);
-
             if bid.commitment.len() != 0 {
                 // calculate hash(masked_amount + salt)
                 let commitment_hash = masked_amount.to_string() + &salt;
@@ -182,12 +194,18 @@ impl Registrar {
 
                 // set the missing bid amount info
                 bid.amount = masked_amount;
+
+                // restore the in-memory bid copy
+                auction.bids.insert(&revealer_account_id, &bid);
             } else {
                 return false;
             }
             
             // insert into reveal's map
             auction.reveals.insert(&revealer_account_id, &masked_amount);
+
+            // restore the in-memory copy
+            self.auctions.insert(&account_id, &auction);
         } else {
             return false;
         }
@@ -199,14 +217,18 @@ impl Registrar {
     /// Withdraw fails if account_id doesn't exist, if `env::predeccessor_account_id()` didn't bid or if auction is still in progress or not all bids were revealed yet.
     /// If not all bids were revealed but required reveal period passed, can withdraw.
     pub fn withdraw(&mut self, account_id: AccountId) -> bool {
-        println!("withdrawer_account_id");
+
         let withdrawer_account_id: AccountId = env::predecessor_account_id();
-        println!("withdrawer_account_id = {}", withdrawer_account_id);
 
         // get the auction that match the account id, from the map
         let start_block_height: BlockHeight = 0;
-        let bids: UnorderedMap<AccountId, Bid> = UnorderedMap::default();
-        let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::default();
+        let account_hash = env::sha256(account_id.as_bytes());
+        let mut bids_prefix = account_hash.clone();
+        bids_prefix.extend_from_slice(b":b");
+        let bids: UnorderedMap<AccountId, Bid> = UnorderedMap::new(bids_prefix);
+        let mut reveals_prefix = account_hash;
+        reveals_prefix.extend_from_slice(b":r");
+        let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::new(reveals_prefix);
         let empty_auction = Auction{ start_block_height, bids, reveals };
         let auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
 
@@ -240,101 +262,119 @@ impl Registrar {
             } else {
                 return false;
             }
+
+            // restore the in-memory copy
+            self.auctions.insert(&account_id, &auction);
         } else {
             return false;
         }
 
         return true;
     }
-/*
+
     /// Creates the new name with given public key for the winer.
     /// The winner of the auction pays the second-highest price.
     pub fn claim(&mut self, account_id: AccountId, public_key: Base58PublicKey) -> bool {
-        let mut winning_account_id: AccountId = "".to_string();
-        let mut second_highest_bid: Balance = 0;
-        match self.auctions.get_mut(&account_id) {
-            Some(auction) => {
-                // check if auction is in progress
-                let current_blockheight = env::block_index();
-                if current_blockheight - auction.start_block_height < self.auction_period {
-                    return false;
-                }
+        // get the auction that match the account id, from the map
+        let start_block_height: BlockHeight = 0;
+        let account_hash = env::sha256(account_id.as_bytes());
+        let mut bids_prefix = account_hash.clone();
+        bids_prefix.extend_from_slice(b":b");
+        let bids: UnorderedMap<AccountId, Bid> = UnorderedMap::new(bids_prefix);
+        let mut reveals_prefix = account_hash;
+        reveals_prefix.extend_from_slice(b":r");
+        let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::new(reveals_prefix);
+        let empty_auction = Auction{ start_block_height, bids, reveals };
+        let auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
 
-                // check if reaveal is in progress 
-                if current_blockheight - auction.start_block_height < self.auction_period + self.reveal_period {
-                    // check if all bidders revealed themselves
-                    if auction.bids.len() != auction.reveals.len() {
-                        return false;
-                    }
-                }
-
-                // get the second highest bid
-                let mut highest_bid: Balance = 0;
-                let mut is_first_check: bool = true;
-                for (revealer_account_id, revealer_balance) in &auction.reveals {
-
-                    // set the highest_bid as the first map entry
-                    if is_first_check {
-                        highest_bid = *revealer_balance;
-                        is_first_check = false;
-                        winning_account_id = revealer_account_id.to_string();
-                        continue;
-                    }
-
-                    if *revealer_balance > second_highest_bid {
-                        second_highest_bid = *revealer_balance;
-
-                        if highest_bid < second_highest_bid {
-                            let temp = highest_bid;
-                            highest_bid = second_highest_bid;
-                            second_highest_bid = temp;
-                            winning_account_id = revealer_account_id.to_string();
-                        }                     
-                    }
-                }
-                
-                // if second_highest_bid is 0 and highest_bid is greater, then second_highest_bid takes the value of highest_bid
-                if second_highest_bid == 0 {
-                    // if second_highest_bid and highest_bid are 0, return false
-                    if highest_bid == 0 {
-                        return false;
-                    }   
-                    second_highest_bid = highest_bid;
-                }
-
-                // check if the claimer is also the winner
-                let claimer_account_id: AccountId = env::predecessor_account_id();
-                if winning_account_id != claimer_account_id {
-                    return false;
-                }
-
-                // TODO: burn the second_highest_bid
-
-                // creates the new name with given public key for the winer
-                let key = Base58PublicKey::from(public_key);
-                let p1 = Promise::new(account_id.to_string()).create_account();
-                let p2 = Promise::new(account_id.to_string()).add_full_access_key(key.0);
-                p1.then(p2);
-                
-                // withdraw all other bids automatically
-                for (bidder_account_id, bid) in auction.bids.iter_mut() {
-                    if &claimer_account_id != bidder_account_id {
-                        // transfer back the bid.amount
-                        if bid.amount > 0 {
-                            Promise::new(bidder_account_id.to_string()).transfer(bid.amount);
-                            bid.amount = 0;
-                        }
-                    }
-                }
-
-                println!("contract balance after transfer = {}", env::account_balance().to_string());
-            }
-            None => {
+        // withdraw funds for loosing bider
+        if auction.start_block_height != 0 {
+            // check if auction is in progress
+            let current_blockheight = env::block_index();
+            if current_blockheight - auction.start_block_height < self.auction_period {
                 return false;
             }
-        }      
+
+            // check if reaveal is in progress 
+            if current_blockheight - auction.start_block_height < self.auction_period + self.reveal_period {
+                // check if all bidders revealed themselves
+                if auction.bids.len() != auction.reveals.len() {
+                    return false;
+                }
+            }
+
+            // get the second highest bid
+            let mut winning_account_id: AccountId = "".to_string();
+            let mut second_highest_bid: Balance = 0;
+            let mut highest_bid: Balance = 0;
+            let mut is_first_check: bool = true;
+
+            let reveals = auction.reveals.iter();
+            for (revealer_account_id, revealer_balance) in reveals {
+                // set the highest_bid as the first map entry
+                if is_first_check {
+                    highest_bid = revealer_balance;
+                    is_first_check = false;
+                    winning_account_id = revealer_account_id.to_string();
+                    continue;
+                }
+
+                if revealer_balance > second_highest_bid {
+                    second_highest_bid = revealer_balance;
+
+                    if highest_bid < second_highest_bid {
+                        let temp = highest_bid;
+                        highest_bid = second_highest_bid;
+                        second_highest_bid = temp;
+                        winning_account_id = revealer_account_id.to_string();
+                    }                     
+                }
+            }
+            
+            // if second_highest_bid is 0 and highest_bid is greater, then second_highest_bid takes the value of highest_bid
+            if second_highest_bid == 0 {
+                // if second_highest_bid and highest_bid are 0, return false
+                if highest_bid == 0 {
+                    return false;
+                }   
+                second_highest_bid = highest_bid;
+            }
+
+            // check if the claimer is also the winner
+            let claimer_account_id: AccountId = env::predecessor_account_id();
+            if winning_account_id != claimer_account_id {
+                return false;
+            }
+
+            // TODO: burn the second_highest_bid
+
+            // creates the new name with given public key for the winer
+            let key = Base58PublicKey::from(public_key);
+            let p1 = Promise::new(account_id.to_string()).create_account();
+            let p2 = Promise::new(account_id.to_string()).add_full_access_key(key.0);
+            p1.then(p2);
+            
+            // withdraw all other bids automatically
+            let bids = auction.bids.iter();
+            for (bidder_account_id, mut bid) in bids {
+                if winning_account_id != bidder_account_id {
+                    // transfer back the bid.amount
+                    if bid.amount > 0 {
+                        Promise::new(bidder_account_id.to_string()).transfer(bid.amount);
+                        bid.amount = 0;
+                        //auction.bids.insert(&bidder_account_id, &bid);
+                    }
+                }
+            }
+
+            // restore the in-memory copy
+            self.auctions.insert(&account_id, &auction);
+        } else {
+            return false;
+        }
+
         return true;
-    }*/
+    }
 }
 
 
@@ -505,7 +545,7 @@ mod tests {
             epoch_height: 0,
         }
     }
-/*
+
     #[test]
     fn bid_with_commitment() {
         let context = get_context(carol());
@@ -627,7 +667,7 @@ mod tests {
 
         assert_eq!(contract.reveal(auctioned_id(), masked_amount, salt), false);
     }
-*/
+
     #[test]
     fn withdraw_after_all_revealed() {
         let context = get_context(carol());
@@ -660,7 +700,7 @@ mod tests {
 
         assert_eq!(contract.withdraw(auctioned_id()), true);
     }
-/*
+
     #[test]
     fn withdraw_after_reveal_period_expired() {
         let context = get_context(carol());
@@ -847,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_winner_pays_highest_bid_if_second_highest_bid_is_0() {
+    fn winner_pays_highest_bid_if_second_highest_bid_is_0() {
         let context = get_context(carol());
         testing_env!(context);
         let mut contract = Registrar::new(30, 35);
@@ -887,6 +927,6 @@ mod tests {
         }
 
         assert_eq!( env::account_balance() == 2239, true);
-    }*/
+    }
 }
 
