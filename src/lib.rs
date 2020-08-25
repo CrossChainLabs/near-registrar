@@ -93,6 +93,8 @@ impl Registrar {
             // check if auction expired
             let current_blockheight = env::block_index();
             if current_blockheight - auction.start_block_height >= self.auction_period {
+                // restore the in-memory copy
+                self.auctions.insert(&account_id, &auction);
                 return false;
             }
 
@@ -102,6 +104,8 @@ impl Registrar {
             let empty_bid: Bid = Bid { amount, commitment };
             let bid = auction.bids.get(&bidder_account_id).unwrap_or(empty_bid); 
             if bid.commitment.len() != 0 {
+                // restore the in-memory copy
+                self.auctions.insert(&account_id, &auction);
                 return false;
             }
    
@@ -167,15 +171,13 @@ impl Registrar {
 
         // insert into reaveals map if it matches the commitment
         if auction.start_block_height != 0 {
-            // check if auction is in progress
+            // check if auction is in progress or if reveal period expired
             let current_blockheight = env::block_index();
-            if current_blockheight - auction.start_block_height < self.auction_period {
-                return false;
-            }
-
-            // check if reveal period expired
-            if current_blockheight - auction.start_block_height >= self.auction_period + self.reveal_period {
-                return false;
+            if (current_blockheight - auction.start_block_height < self.auction_period) || 
+               (current_blockheight - auction.start_block_height >= self.auction_period + self.reveal_period) {
+                   // restore the in-memory copy
+                   self.auctions.insert(&account_id, &auction);              
+                   return false;
             }
 
             // check if `hash(masked_amount + salt)` != `commitment` by env::predeccessor_account_id()`
@@ -189,6 +191,10 @@ impl Registrar {
                 let commitment_hash = masked_amount.to_string() + &salt;
                 let revealer_commitment = &bs58::encode(&commitment_hash).into_string();
                 if str::from_utf8(&bid.commitment).unwrap() != revealer_commitment {
+                    // restore the in-memory copy
+                    auction.bids.insert(&revealer_account_id, &bid);
+                    self.auctions.insert(&account_id, &auction);
+
                     return false;
                 }
 
@@ -198,6 +204,8 @@ impl Registrar {
                 // restore the in-memory bid copy
                 auction.bids.insert(&revealer_account_id, &bid);
             } else {
+                // restore the in-memory bid copy
+                self.auctions.insert(&account_id, &auction);
                 return false;
             }
             
@@ -230,25 +238,28 @@ impl Registrar {
         reveals_prefix.extend_from_slice(b":r");
         let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::new(reveals_prefix);
         let empty_auction = Auction{ start_block_height, bids, reveals };
-        let auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
+        let mut auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
 
         // withdraw funds for loosing bider
         if auction.start_block_height != 0 {
             // return false if the auction is in progress 
             let current_blockheight = env::block_index();
             if current_blockheight - auction.start_block_height < self.auction_period {
+                // restore the in-memory copy
+                self.auctions.insert(&account_id, &auction);
                 return false;
             }
 
             // return false if reveal is in progress and not all bidders revealed themselves
             if current_blockheight - auction.start_block_height < self.auction_period + self.reveal_period {
                 if auction.bids.len() != auction.reveals.len() {
+                    // restore the in-memory copy
+                    self.auctions.insert(&account_id, &auction);
                     return false;
                 }
             }
 
             // withdraw funds for loosing bider
-            // if bidder already exists return false
             let amount = 0;
             let commitment: Vec<u8> = Vec::new();
             let empty_bid: Bid = Bid { amount, commitment };
@@ -259,7 +270,12 @@ impl Registrar {
                     Promise::new(withdrawer_account_id.to_string()).transfer(bid.amount);
                     bid.amount = 0;    
                 }
+
+                // restore the in-memory bid copy
+                auction.bids.insert(&withdrawer_account_id, &bid);
             } else {
+                // restore the in-memory copy
+                self.auctions.insert(&account_id, &auction);
                 return false;
             }
 
@@ -285,13 +301,15 @@ impl Registrar {
         reveals_prefix.extend_from_slice(b":r");
         let reveals: UnorderedMap<AccountId, Balance> = UnorderedMap::new(reveals_prefix);
         let empty_auction = Auction{ start_block_height, bids, reveals };
-        let auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
+        let mut auction = self.auctions.get(&account_id).unwrap_or(empty_auction);
 
         // withdraw funds for loosing bider
         if auction.start_block_height != 0 {
             // check if auction is in progress
             let current_blockheight = env::block_index();
             if current_blockheight - auction.start_block_height < self.auction_period {
+                // restore the in-memory copy
+                self.auctions.insert(&account_id, &auction);
                 return false;
             }
 
@@ -299,6 +317,8 @@ impl Registrar {
             if current_blockheight - auction.start_block_height < self.auction_period + self.reveal_period {
                 // check if all bidders revealed themselves
                 if auction.bids.len() != auction.reveals.len() {
+                    // restore the in-memory copy
+                    self.auctions.insert(&account_id, &auction);
                     return false;
                 }
             }
@@ -335,6 +355,8 @@ impl Registrar {
             if second_highest_bid == 0 {
                 // if second_highest_bid and highest_bid are 0, return false
                 if highest_bid == 0 {
+                    // restore the in-memory copy
+                    self.auctions.insert(&account_id, &auction);
                     return false;
                 }   
                 second_highest_bid = highest_bid;
@@ -343,6 +365,8 @@ impl Registrar {
             // check if the claimer is also the winner
             let claimer_account_id: AccountId = env::predecessor_account_id();
             if winning_account_id != claimer_account_id {
+                // restore the in-memory copy
+                self.auctions.insert(&account_id, &auction);
                 return false;
             }
 
@@ -354,16 +378,30 @@ impl Registrar {
             let p2 = Promise::new(account_id.to_string()).add_full_access_key(key.0);
             p1.then(p2);
             
-            // withdraw all other bids automatically
+            // get the vector of bidder_account_id
             let bids = auction.bids.iter();
-            for (bidder_account_id, mut bid) in bids {
+            let mut bidders: Vec<AccountId> = Vec::new();
+            for (bidder_account_id, _bid) in bids {
                 if winning_account_id != bidder_account_id {
+                    bidders.push(bidder_account_id);
+                }
+            }
+
+            // withdraw all other bids automatically
+            for bidder_account_id in bidders {
+                let amount = 0;
+                let commitment: Vec<u8> = Vec::new();
+                let empty_bid: Bid = Bid { amount, commitment };
+                let mut bid = auction.bids.get(&bidder_account_id).unwrap_or(empty_bid); 
+                if bid.commitment.len() != 0 {
                     // transfer back the bid.amount
                     if bid.amount > 0 {
                         Promise::new(bidder_account_id.to_string()).transfer(bid.amount);
-                        bid.amount = 0;
-                        //auction.bids.insert(&bidder_account_id, &bid);
+                        bid.amount = 0;    
                     }
+
+                    // restore the in-memory bid copy
+                    auction.bids.insert(&bidder_account_id, &bid);
                 }
             }
 
