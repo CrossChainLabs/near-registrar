@@ -150,8 +150,6 @@ impl Registrar {
 
         // check if masked amount was deposited
         if masked_amount != env::attached_deposit() {
-            // TODO: return the attached deposit
-            // TODO: if the attached deposit is greater than masked_amount, return only the difference and continue
             return false;
         }
 
@@ -194,7 +192,6 @@ impl Registrar {
                     // restore the in-memory copy
                     auction.bids.insert(&revealer_account_id, &bid);
                     self.auctions.insert(&account_id, &auction);
-
                     return false;
                 }
 
