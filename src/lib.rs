@@ -40,6 +40,7 @@ pub struct Auction {
     reveals: UnorderedMap<AccountId, Balance>,
 }
 
+#[near_bindgen]
 #[derive(BorshSerialize, BorshDeserialize)]
 // AccountId that is auctioned
 pub struct Registrar {
@@ -49,7 +50,6 @@ pub struct Registrar {
     auctions: UnorderedMap<AccountId, Auction>
 }
 
-#[near_bindgen]
 impl Registrar {  
     /// Construct this contract and record starting block height.
     /// auction_period represents the number of blocks an auction can take, aproximately 7 days
